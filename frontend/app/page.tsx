@@ -6,6 +6,7 @@ import Link from "next/link";
 import { WalletButton } from "./components/WalletButton";
 import { AiInsightStream } from "./components/AiInsightStream";
 import { TransactionList } from "@/components/transaction-list";
+import { RewardSummary } from "@/components/reward-summary";
 interface Slice {
   name: string;
   value: number;
@@ -35,9 +36,9 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="min-h-screen p-8">
+    <div className="min-h-screen md:p-8">
       <div className="mx-auto max-w-6xl space-y-8">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between max-md:flex-col gap-4">
           <div className="flex items-center gap-3">
             <Shield className="h-10 w-10 text-primary" />
             <div>
@@ -60,6 +61,8 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        <RewardSummary />
 
         <div className="grid gap-4 md:grid-cols-2">
           <Link
@@ -90,7 +93,7 @@ export default function Home() {
         <TransactionList />
 
         <AiInsightStream />
-      </div>
-    </div>
+      </div >
+    </div >
   );
 }

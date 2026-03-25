@@ -1,19 +1,23 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { ArrowUpFromLine, ArrowDownToLine, Loader2 } from "lucide-react";
+import { ArrowUpFromLine, ArrowDownToLine, Loader2, FileText, Shield } from "lucide-react";
 import { useWallet } from "@/hooks/use-wallet";
-import { useNetwork, NetworkType } from "@/app/context/NetworkContext";
-import { buildDepositXdr, buildWithdrawXdr, simulateAndAssembleTransaction, submitTransaction, fetchVaultData, VaultMetrics, getNetworkPassphrase } from "@/lib/stellar";
+import { useNetwork } from "@/app/context/NetworkContext";
+import { buildDepositXdr, buildWithdrawXdr, simulateAndAssembleTransaction, submitTransaction, fetchVaultData, VaultMetrics, getNetworkPassphrase, estimateTransactionFee } from "@/lib/stellar";
 import VaultAPYChart from "@/components/VaultAPYChart";
 import TimeframeFilter, { Timeframe } from "@/components/TimeframeFilter";
 import { generateMockData, DataPoint } from "@/lib/chart-data";
+import TermsModal from "@/components/TermsModal";
+import PrivacyModal from "@/components/PrivacyModal";
+import { Modal } from "@/components/ui/modal";
+import SigningOverlay, { SigningStep } from "@/components/SigningOverlay";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
@@ -25,14 +29,34 @@ export default function VaultPage() {
   const [activeTab, setActiveTab] = useState<TabType>("deposit");
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
+  const [signingStep, setSigningStep] = useState<SigningStep>("idle");
+  const [signingErrorMessage, setSigningErrorMessage] = useState("");
+  const [estimatedFee, setEstimatedFee] = useState<string | null>(null);
+  const [estimatingFee, setEstimatingFee] = useState(false);
   const [chartLoading, setChartLoading] = useState(false);
-  const [status, setStatus] = useState<{ type: "success" | "error" | null; message: string }>({
-    type: null,
-    message: "",
-  });
   const [metrics, setMetrics] = useState<VaultMetrics | null>(null);
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1M');
   const [chartData, setChartData] = useState<DataPoint[]>([]);
+  
+  // Legal acceptance state
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [showLegalWarning, setShowLegalWarning] = useState(false);
+
+  // Check for existing legal acceptance on mount
+  useEffect(() => {
+    const savedTerms = localStorage.getItem('terms_accepted');
+    const savedPrivacy = localStorage.getItem('privacy_accepted');
+    
+    if (savedTerms === 'true') {
+      setTermsAccepted(true);
+    }
+    if (savedPrivacy === 'true') {
+      setPrivacyAccepted(true);
+    }
+  }, []);
 
   // Load initial chart data
   useEffect(() => {
@@ -43,10 +67,10 @@ export default function VaultPage() {
   const handleTimeframeChange = async (timeframe: Timeframe) => {
     setChartLoading(true);
     setSelectedTimeframe(timeframe);
-    
+
     // Simulate API call delay for smooth transitions
     await new Promise(resolve => setTimeout(resolve, 500));
-    
+
     setChartData(generateMockData(timeframe));
     setChartLoading(false);
   };
@@ -67,29 +91,68 @@ export default function VaultPage() {
         network
       );
       setMetrics(data);
-      setStatus({ type: null, message: "" });
     } catch (error) {
-      setStatus({
-        type: "error",
-        message: error instanceof Error ? error.message : "Failed to load vault data",
-      });
+      toast.error(error instanceof Error ? error.message : "Failed to load vault data");
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const fetchFee = async () => {
+      if (!connected || !address || !amount || parseFloat(amount) <= 0) {
+        setEstimatedFee(null);
+        return;
+      }
+
+      setEstimatingFee(true);
+      try {
+        let xdr;
+        if (activeTab === "deposit") {
+          xdr = await buildDepositXdr(CONTRACT_ID, address, amount, network);
+        } else {
+          xdr = await buildWithdrawXdr(CONTRACT_ID, address, amount, network);
+        }
+
+        const { fee, error } = await estimateTransactionFee(xdr, network);
+        if (!error && fee) {
+          const feeXlm = (Number(fee) / 1e7).toFixed(5);
+          setEstimatedFee(feeXlm);
+        } else {
+          setEstimatedFee(null);
+        }
+      } catch (e) {
+        setEstimatedFee(null);
+      } finally {
+        setEstimatingFee(false);
+      }
+    };
+
+    const timeoutId = setTimeout(fetchFee, 500);
+    return () => clearTimeout(timeoutId);
+  }, [amount, activeTab, connected, address, network]);
 
   const userBalance = metrics ? parseFloat(metrics.userBalance) / 1e7 : 0;
   const userShares = metrics ? parseFloat(metrics.userShares) / 1e7 : 0;
 
   const handleDeposit = useCallback(async () => {
     if (!connected || !address || !amount || parseFloat(amount) <= 0) {
-      setStatus({ type: "error", message: "Please enter a valid amount" });
+      toast.error("Please enter a valid amount");
+      return;
+    }
+
+    // Check legal acceptance for first-time users
+    if (!termsAccepted || !privacyAccepted) {
+      setShowLegalWarning(true);
       return;
     }
 
     setLoading(true);
     setStatus({ type: null, message: "" });
+    setSigningErrorMessage("");
+    setSigningStep("preparing");
 
+    const toastId = toast.loading("Processing deposit…");
     try {
       const passphrase = getNetworkPassphrase(network);
 
@@ -109,46 +172,60 @@ export default function VaultPage() {
         throw new Error(assembleError || "Failed to assemble transaction");
       }
 
+      setSigningStep("signing");
       const { signedTxXdr, error: signError } = await signTransaction(assembledXdr, passphrase);
 
       if (signError || !signedTxXdr) {
         throw new Error(signError || "Failed to sign transaction");
       }
 
+      setSigningStep("submitting");
       const { hash, error: submitError } = await submitTransaction(signedTxXdr, network);
 
       if (submitError || !hash) {
         throw new Error(submitError || "Failed to submit transaction");
       }
 
+      toast.success(`Deposit successful! Tx: ${hash.slice(0, 8)}…`, { id: toastId });
+      setAmount("");
+      await loadVaultData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Deposit failed", { id: toastId });
+      setSigningStep("success");
       setStatus({ type: "success", message: `Deposit successful! Transaction: ${hash.slice(0, 8)}...` });
       setAmount("");
       await loadVaultData();
     } catch (error) {
+      const msg = error instanceof Error ? error.message : "Deposit failed";
+      setSigningErrorMessage(msg);
+      setSigningStep("error");
       setStatus({
         type: "error",
-        message: error instanceof Error ? error.message : "Deposit failed",
+        message: msg,
       });
     } finally {
       setLoading(false);
     }
-  }, [connected, address, amount, network, signTransaction, loadVaultData]);
+  }, [connected, address, amount, network, signTransaction, loadVaultData, termsAccepted, privacyAccepted]);
 
   const handleWithdraw = useCallback(async () => {
     if (!connected || !address || !amount || parseFloat(amount) <= 0) {
-      setStatus({ type: "error", message: "Please enter a valid amount" });
+      toast.error("Please enter a valid amount");
       return;
     }
 
     const withdrawAmount = parseFloat(amount);
     if (withdrawAmount > userShares) {
-      setStatus({ type: "error", message: `Insufficient balance. You have ${userShares.toFixed(2)} shares.` });
+      toast.error(`Insufficient balance. You have ${userShares.toFixed(2)} shares.`);
       return;
     }
 
     setLoading(true);
     setStatus({ type: null, message: "" });
+    setSigningErrorMessage("");
+    setSigningStep("preparing");
 
+    const toastId = toast.loading("Processing withdrawal…");
     try {
       const passphrase = getNetworkPassphrase(network);
 
@@ -168,30 +245,62 @@ export default function VaultPage() {
         throw new Error(assembleError || "Failed to assemble transaction");
       }
 
+      setSigningStep("signing");
       const { signedTxXdr, error: signError } = await signTransaction(assembledXdr, passphrase);
 
       if (signError || !signedTxXdr) {
         throw new Error(signError || "Failed to sign transaction");
       }
 
+      setSigningStep("submitting");
       const { hash, error: submitError } = await submitTransaction(signedTxXdr, network);
 
       if (submitError || !hash) {
         throw new Error(submitError || "Failed to submit transaction");
       }
 
+      toast.success(`Withdrawal successful! Tx: ${hash.slice(0, 8)}…`, { id: toastId });
+      setAmount("");
+      await loadVaultData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Withdrawal failed", { id: toastId });
+      setSigningStep("success");
       setStatus({ type: "success", message: `Withdraw successful! Transaction: ${hash.slice(0, 8)}...` });
       setAmount("");
       await loadVaultData();
     } catch (error) {
+      const msg = error instanceof Error ? error.message : "Withdraw failed";
+      setSigningErrorMessage(msg);
+      setSigningStep("error");
       setStatus({
         type: "error",
-        message: error instanceof Error ? error.message : "Withdraw failed",
+        message: msg,
       });
     } finally {
       setLoading(false);
     }
   }, [connected, address, amount, userShares, network, signTransaction, loadVaultData]);
+
+  const handleTermsAccept = () => {
+    setTermsAccepted(true);
+    localStorage.setItem('terms_accepted', 'true');
+    setShowTermsModal(false);
+  };
+
+  const handlePrivacyAccept = () => {
+    setPrivacyAccepted(true);
+    localStorage.setItem('privacy_accepted', 'true');
+    setShowPrivacyModal(false);
+  };
+
+  const handleLegalAgreement = () => {
+    setShowLegalWarning(false);
+    if (!termsAccepted) {
+      setShowTermsModal(true);
+    } else if (!privacyAccepted) {
+      setShowPrivacyModal(true);
+    }
+  };
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -201,88 +310,164 @@ export default function VaultPage() {
         <div className="flex border-b">
           <button
             onClick={() => setActiveTab("deposit")}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 font-medium transition-colors ${activeTab === "deposit"
-              ? "bg-primary/10 text-primary border-b-2 border-primary"
-              : "text-muted-foreground hover:text-foreground"
-              }`}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 font-medium transition-colors ${
+              activeTab === "deposit"
+                ? "bg-background text-foreground border-b-2 border-primary"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
           >
-            <ArrowUpFromLine className="w-4 h-4" />
+            <ArrowUpFromLine className="h-4 w-4" />
             Deposit
           </button>
           <button
             onClick={() => setActiveTab("withdraw")}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 font-medium transition-colors ${activeTab === "withdraw"
-              ? "bg-primary/10 text-primary border-b-2 border-primary"
-              : "text-muted-foreground hover:text-foreground"
-              }`}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 font-medium transition-colors ${
+              activeTab === "withdraw"
+                ? "bg-background text-foreground border-b-2 border-primary"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
           >
-            <ArrowDownToLine className="w-4 h-4" />
+            <ArrowDownToLine className="h-4 w-4" />
             Withdraw
           </button>
         </div>
 
         <div className="p-6">
-          {!connected ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Connect your wallet to deposit or withdraw funds
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {activeTab === "withdraw" && (
-                <div className="text-sm text-muted-foreground mb-2">
-                  Available: {userShares.toFixed(2)} XHS
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  {activeTab === "deposit" ? "Amount (USDC)" : "Amount (XHS)"}
-                </label>
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full px-4 py-3 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                  min="0"
-                  step="0.01"
-                />
-              </div>
-
-              {activeTab === "deposit" && (
-                <button
-                  onClick={handleDeposit}
-                  disabled={loading || !amount}
-                  className="w-full py-3 px-4 rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {loading ? "Processing..." : "Deposit"}
-                </button>
-              )}
-
-              {activeTab === "withdraw" && (
-                <button
-                  onClick={handleWithdraw}
-                  disabled={loading || !amount || userShares <= 0}
-                  className="w-full py-3 px-4 rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {loading ? "Processing..." : "Withdraw"}
-                </button>
-              )}
-
-              {status.type && (
-                <div
-                  className={`p-4 rounded-lg ${status.type === "success"
-                    ? "bg-green-500/10 text-green-500"
-                    : "bg-red-500/10 text-red-500"
-                    }`}
-                >
-                  {status.message}
-                </div>
-              )}
+          {connected && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Your Balance</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{userBalance.toFixed(2)} XLM</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Your Shares</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{userShares.toFixed(2)}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Current APY</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">
+                    {metrics ? (parseFloat(metrics.sharePrice) * 100).toFixed(2) : "0.00"}%
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           )}
+
+          {activeTab === "deposit" && (
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="deposit-amount" className="block text-sm font-medium mb-2">
+                  Deposit Amount
+                </label>
+                <Input
+                  id="deposit-amount"
+                  type="number"
+                  placeholder="Enter amount to deposit"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  disabled={!connected || loading}
+                />
+                {(estimatingFee || estimatedFee) && amount && parseFloat(amount) > 0 && (
+                  <div className="mt-2 text-sm text-muted-foreground flex items-center justify-between">
+                    <span>Estimated Network Fee:</span>
+                    <span>
+                      {estimatingFee ? (
+                        <span className="flex items-center gap-1">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Calculating...
+                        </span>
+                      ) : (
+                        `~${estimatedFee} XLM`
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Legal Acceptance Status */}
+              <div className="space-y-2">
+                <div className="flex sm:items-center max-sm:flex-col gap-4 text-sm">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    <span>Terms of Service:</span>
+                    <Badge variant={termsAccepted ? "default" : "secondary"}>
+                      {termsAccepted ? "Accepted" : "Not Accepted"}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    <span>Privacy Policy:</span>
+                    <Badge variant={privacyAccepted ? "default" : "secondary"}>
+                      {privacyAccepted ? "Accepted" : "Not Accepted"}
+                    </Badge>
+                  </div>
+                </div>
+                {(!termsAccepted || !privacyAccepted) && (
+                  <p className="text-xs text-muted-foreground">
+                    You must accept both the Terms of Service and Privacy Policy before making your first deposit.
+                  </p>
+                )}
+              </div>
+
+              <Button 
+                onClick={handleDeposit} 
+                disabled={!connected || loading || !amount || parseFloat(amount) <= 0}
+                className="w-full"
+              >
+                {loading ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Processing...
+                  </div>
+                ) : (
+                  "Deposit"
+                )}
+              </Button>
+            </div>
+          )}
+
+          {activeTab === "withdraw" && (
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="withdraw-amount" className="block text-sm font-medium mb-2">
+                  Withdraw Amount
+                </label>
+                <Input
+                  id="withdraw-amount"
+                  type="number"
+                  placeholder="Enter amount to withdraw"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  disabled={!connected || loading}
+                />
+              </div>
+              <Button 
+                onClick={handleWithdraw} 
+                disabled={!connected || loading || !amount || parseFloat(amount) <= 0}
+                className="w-full"
+              >
+                {loading ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Processing...
+                  </div>
+                ) : (
+                  "Withdraw"
+                )}
+              </Button>
+            </div>
+          )}
+
         </div>
       </div>
 
@@ -298,6 +483,91 @@ export default function VaultPage() {
           </div>
           <VaultAPYChart data={chartData} loading={chartLoading} />
         </div>
+      )}
+
+      {/* Legal Modals */}
+      <TermsModal
+        isOpen={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+        onAccept={handleTermsAccept}
+        showAcceptCheckbox={true}
+      />
+
+      <PrivacyModal
+        isOpen={showPrivacyModal}
+        onClose={() => setShowPrivacyModal(false)}
+        onAccept={handlePrivacyAccept}
+        showAcceptCheckbox={true}
+      />
+
+      <SigningOverlay
+        step={signingStep}
+        errorMessage={signingErrorMessage}
+        onDismiss={() => setSigningStep("idle")}
+      />
+
+      {/* Legal Warning Modal */}
+      {showLegalWarning && (
+        <Modal
+          isOpen={showLegalWarning}
+          onClose={() => setShowLegalWarning(false)}
+          title="Legal Agreement Required"
+          size="md"
+        >
+          <div className="space-y-6">
+            <Alert>
+              <Shield className="h-4 w-4" />
+              <AlertDescription>
+                Before making your first deposit, you must accept our Terms of Service and Privacy Policy.
+              </AlertDescription>
+            </Alert>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-5 w-5" />
+                  <span className="font-medium">Terms of Service</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setShowLegalWarning(false);
+                    setShowTermsModal(true);
+                  }}
+                >
+                  {termsAccepted ? "View" : "Accept"}
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  <span className="font-medium">Privacy Policy</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setShowLegalWarning(false);
+                    setShowPrivacyModal(true);
+                  }}
+                >
+                  {privacyAccepted ? "View" : "Accept"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                onClick={handleLegalAgreement}
+                disabled={!termsAccepted || !privacyAccepted}
+              >
+                Continue to Deposit
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

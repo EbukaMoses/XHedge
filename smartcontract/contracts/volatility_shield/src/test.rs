@@ -3512,7 +3512,7 @@ fn test_cascade_pause_blocks_operations() {
     // Rebalance should fail with cascade pause error
     let allocations = soroban_sdk::Map::new(&env);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.rebalance(&admin, &allocations, &100u32);
+        client.try_rebalance(&admin, &allocations, &100u32);
     }));
     assert!(result.is_err());
 }
@@ -3657,7 +3657,7 @@ fn test_delegate_withdrawal() {
     stellar_asset_client.mint(&owner, &1000);
 
     // Owner deposits tokens
-    client.deposit(&owner, &token_id, &1000i128);
+    client.deposit(&owner, &token_id, &1000i128, &None);
     assert_eq!(client.balance(&owner), 1000);
 
     // Set delegate
@@ -3693,7 +3693,7 @@ fn test_delegate_withdrawal_unauthorized() {
     stellar_asset_client.mint(&owner, &1000);
 
     // Owner deposits tokens
-    client.deposit(&owner, &token_id, &1000i128);
+    client.deposit(&owner, &token_id, &1000i128, &None);
     assert_eq!(client.balance(&owner), 1000);
 
     // Unauthorized user tries to withdraw on behalf of owner
@@ -3729,7 +3729,7 @@ fn test_revoked_delegate_withdrawal() {
     stellar_asset_client.mint(&owner, &1000);
 
     // Owner deposits tokens
-    client.deposit(&owner, &token_id, &1000i128);
+    client.deposit(&owner, &token_id, &1000i128, &None);
     assert_eq!(client.balance(&owner), 1000);
 
     // Set delegate
@@ -3775,7 +3775,7 @@ fn test_owner_can_always_withdraw() {
     stellar_asset_client.mint(&owner, &1000);
 
     // Owner deposits tokens
-    client.deposit(&owner, &token_id, &1000i128);
+    client.deposit(&owner, &token_id, &1000i128, &None);
     assert_eq!(client.balance(&owner), 1000);
 
     // Set delegate

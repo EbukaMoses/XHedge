@@ -1,15 +1,19 @@
 "use client";
 
 import { Sidebar } from "@/components/sidebar";
+
 import { ReactNode, useEffect } from "react";
 import { TourGuide } from "./TourGuide";
 import { useTour } from "./TourContext";
+import { OfflineBanner } from "./OfflineBanner";
+
 
 interface DashboardLayoutProps {
   children: ReactNode;
 }
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
+
   const { tourActive, tourStep, setTourStep, handleTourClose, tourSteps, checkCompletedFlows } = useTour();
 
   useEffect(() => {
@@ -20,7 +24,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar />
-      <main className="lg:pl-64">
+      <main id="main-content" role="main" className="lg:pl-64" tabIndex={-1}>
         <div className="p-4 pt-16 lg:p-8">
           {children}
         </div>
@@ -35,6 +39,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           goToStep={setTourStep}
         />
       )}
+      <OfflineBanner />
+
     </div>
   );
 }

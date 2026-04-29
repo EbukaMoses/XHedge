@@ -85,18 +85,6 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "AssetDecimals"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "u32": 9
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
                               "symbol": "AssetTotalAssets"
                             },
                             {
@@ -121,6 +109,18 @@
                         },
                         "val": {
                           "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "EmergencyShutdown"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "bool": false
                         }
                       },
                       {
@@ -191,6 +191,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ProposalIds"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Proposals"
                             }
                           ]
@@ -209,6 +221,22 @@
                         },
                         "val": {
                           "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SupportedAssets"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                            }
+                          ]
                         }
                       },
                       {
@@ -296,7 +324,7 @@
             },
             "ext": "v0"
           },
-          4095
+          535680
         ]
       ],
       [
@@ -317,7 +345,7 @@
             },
             "ext": "v0"
           },
-          4095
+          535680
         ]
       ]
     ]
